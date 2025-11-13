@@ -2,24 +2,29 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strconv"
-	"time"
 
 	"github.com/kyverno/chainsaw/pkg/apis"
 	"github.com/kyverno/chainsaw/pkg/apis/v1alpha1"
 	"github.com/kyverno/chainsaw/pkg/client"
+	apibindings "github.com/kyverno/chainsaw/pkg/engine/bindings"
 	"github.com/kyverno/chainsaw/pkg/engine/namespacer"
 	"github.com/kyverno/chainsaw/pkg/engine/operations"
 	"github.com/kyverno/chainsaw/pkg/engine/operations/internal"
 	"github.com/kyverno/chainsaw/pkg/engine/outputs"
 	"github.com/kyverno/chainsaw/pkg/logging"
 	"github.com/kyverno/kyverno-json/pkg/core/compilers"
+	"github.com/kyverno/pkg/ext/output/color"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
+	"sigs.k8s.io/yaml"
 )
 
 type operation struct {
@@ -46,19 +51,6 @@ func New(
 func (o *operation) Exec(ctx context.Context, bindings apis.Bindings) (_ outputs.Outputs, _err error) {
 	if bindings == nil {
 		bindings = apis.NewBindings()
-	}
-
-	// Log warnings for handlers (not yet implemented)
-	if o.watch.Handlers != nil {
-		if len(o.watch.Handlers.OnProgress) > 0 {
-			logging.Log(ctx, logging.Watch, logging.WarnStatus, nil, logging.EmptyColor, logging.ErrSection(errors.New("onProgress handlers are not yet implemented")))
-		}
-		if len(o.watch.Handlers.OnSuccess) > 0 {
-			logging.Log(ctx, logging.Watch, logging.WarnStatus, nil, logging.EmptyColor, logging.ErrSection(errors.New("onSuccess handlers are not yet implemented")))
-		}
-		if len(o.watch.Handlers.OnFailure) > 0 {
-			logging.Log(ctx, logging.Watch, logging.WarnStatus, nil, logging.EmptyColor, logging.ErrSection(errors.New("onFailure handlers are not yet implemented")))
-		}
 	}
 
 	obj := unstructured.Unstructured{}
@@ -169,6 +161,11 @@ func (o *operation) execute(ctx context.Context, bindings apis.Bindings, apiVers
 				continue
 			}
 
+			// Execute onProgress handlers
+			if o.watch.Handlers != nil && len(o.watch.Handlers.OnProgress) > 0 {
+				o.executeHandlers(ctx, bindings, o.watch.Handlers.OnProgress, obj, event.Type)
+			}
+
 			// Check failure conditions first (they immediately fail)
 			if len(o.watch.FailureConditions) > 0 {
 				for _, condition := range o.watch.FailureConditions {
@@ -177,6 +174,10 @@ func (o *operation) execute(ctx context.Context, bindings apis.Bindings, apiVers
 						return fmt.Errorf("error evaluating failure condition: %w", err)
 					}
 					if matched {
+						// Execute onFailure handlers
+						if o.watch.Handlers != nil && len(o.watch.Handlers.OnFailure) > 0 {
+							o.executeHandlers(ctx, bindings, o.watch.Handlers.OnFailure, obj, event.Type)
+						}
 						return fmt.Errorf("failure condition met: %s %s %v", condition.Path, condition.Op, condition.Value)
 					}
 				}
@@ -196,11 +197,19 @@ func (o *operation) execute(ctx context.Context, bindings apis.Bindings, apiVers
 					}
 				}
 				if allMatched {
+					// Execute onSuccess handlers
+					if o.watch.Handlers != nil && len(o.watch.Handlers.OnSuccess) > 0 {
+						o.executeHandlers(ctx, bindings, o.watch.Handlers.OnSuccess, obj, event.Type)
+					}
 					// Success!
 					return nil
 				}
 			} else {
 				// No success conditions means just watching for the resource to exist
+				// Execute onSuccess handlers
+				if o.watch.Handlers != nil && len(o.watch.Handlers.OnSuccess) > 0 {
+					o.executeHandlers(ctx, bindings, o.watch.Handlers.OnSuccess, obj, event.Type)
+				}
 				return nil
 			}
 		}
@@ -298,4 +307,87 @@ func toFloat64(v interface{}) (float64, error) {
 	default:
 		return 0, fmt.Errorf("cannot convert %T to float64", v)
 	}
+}
+
+// executeHandlers executes a list of handler expressions as shell scripts
+func (o *operation) executeHandlers(ctx context.Context, bindings apis.Bindings, handlers []v1alpha1.Expression, obj *unstructured.Unstructured, eventType watch.EventType) {
+	if len(handlers) == 0 {
+		return
+	}
+
+	// Add watch-specific bindings
+	handlerBindings := bindings
+	if obj != nil {
+		// Add resource as JSON
+		resourceJSON, err := json.MarshalIndent(obj.Object, "", "  ")
+		if err == nil {
+			handlerBindings = apibindings.RegisterBinding(handlerBindings, "resource", string(resourceJSON))
+		}
+
+		// Add resource as YAML
+		resourceYAML, err := yaml.Marshal(obj.Object)
+		if err == nil {
+			handlerBindings = apibindings.RegisterBinding(handlerBindings, "resourceYAML", string(resourceYAML))
+		}
+
+		// Add individual resource fields
+		handlerBindings = apibindings.RegisterBinding(handlerBindings, "resourceName", obj.GetName())
+		handlerBindings = apibindings.RegisterBinding(handlerBindings, "resourceNamespace", obj.GetNamespace())
+		handlerBindings = apibindings.RegisterBinding(handlerBindings, "resourceKind", obj.GetKind())
+		handlerBindings = apibindings.RegisterBinding(handlerBindings, "resourceAPIVersion", obj.GetAPIVersion())
+	}
+	handlerBindings = apibindings.RegisterBinding(handlerBindings, "eventType", string(eventType))
+
+	// Execute each handler
+	for _, handler := range handlers {
+		if err := o.executeHandler(ctx, handlerBindings, handler); err != nil {
+			logging.Log(ctx, logging.Watch, logging.WarnStatus, nil, color.BoldYellow,
+				logging.Section("HANDLER", string(handler)),
+				logging.ErrSection(err))
+		}
+	}
+}
+
+// executeHandler executes a single handler expression as a shell script
+func (o *operation) executeHandler(ctx context.Context, bindings apis.Bindings, handler v1alpha1.Expression) error {
+	// Evaluate the handler expression
+	script, err := handler.Value(ctx, o.compilers, bindings)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate handler expression: %w", err)
+	}
+
+	if script == "" {
+		return nil
+	}
+
+	// Prepare environment variables from bindings
+	env := os.Environ()
+	for key, value := range bindings {
+		if binding := value.Value(); binding != nil {
+			env = append(env, fmt.Sprintf("%s=%v", key, binding))
+		}
+	}
+
+	// Execute the script
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	cmd.Env = env
+
+	var output internal.CommandOutput
+	cmd.Stdout = &output.Stdout
+	cmd.Stderr = &output.Stderr
+
+	if err := cmd.Run(); err != nil {
+		// Log output even on error
+		if sections := output.Sections(); len(sections) != 0 {
+			logging.Log(ctx, logging.Watch, logging.ErrorStatus, nil, color.BoldRed, sections...)
+		}
+		return fmt.Errorf("handler script failed: %w", err)
+	}
+
+	// Log successful output
+	if sections := output.Sections(); len(sections) != 0 {
+		logging.Log(ctx, logging.Watch, logging.LogStatus, nil, color.BoldFgCyan, sections...)
+	}
+
+	return nil
 }

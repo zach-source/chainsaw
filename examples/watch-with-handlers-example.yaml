@@ -1,7 +1,7 @@
 apiVersion: chainsaw.kyverno.io/v1alpha2
 kind: Test
 metadata:
-  name: watch-deployment-example
+  name: watch-with-handlers-example
 spec:
   namespace: chainsaw-demo
   steps:
@@ -15,7 +15,7 @@ spec:
             name: example-deployment
             namespace: chainsaw-demo
           spec:
-            replicas: 1
+            replicas: 2
             selector:
               matchLabels:
                 app: example
@@ -28,8 +28,8 @@ spec:
                   - name: nginx
                     image: nginx:latest
 
-    # Step 2: Watch the deployment until it's ready
-    - name: watch-deployment
+    # Step 2: Watch the deployment with handlers
+    - name: watch-deployment-with-handlers
       watch:
         resource:
           apiVersion: apps/v1
@@ -37,24 +37,40 @@ spec:
           namespace: chainsaw-demo
           name: example-deployment
         timeout: 120s
-        # Success condition: at least 1 replica is available
+
+        # Success condition: both replicas are available
         successConditions:
           - path: status.availableReplicas
             op: ">="
-            value: 1
-        # Failure condition: deployment is marked as failed
+            value: 2
+
+        # Failure conditions
         failureConditions:
-          - path: status.conditions[?(@.type=="Available")].status
+          - path: status.conditions[?(@.type=="Progressing")].status
             op: "=="
             value: "False"
-        # Optional: Event handlers (shell scripts)
+
+        # Event handlers with examples
         handlers:
+          # Called on every watch event (useful for debugging)
           onProgress:
-            - echo "Watching deployment - Available: $(echo '$resource' | jq -r '.status.availableReplicas // 0')"
+            - echo "Watch event received - Type: $eventType"
+            - echo "Resource: $resourceName in $resourceNamespace"
+            - echo "Available replicas: $(echo '$resource' | jq -r '.status.availableReplicas // 0')"
+
+          # Called when all success conditions are met
           onSuccess:
-            - echo "✅ Deployment ready!"
+            - echo "✅ Deployment is ready!"
+            - echo "Final state:"
+            - echo "$resourceYAML"
+            - kubectl get deployment example-deployment -n chainsaw-demo -o wide
+
+          # Called when any failure condition is met
           onFailure:
+            - echo "❌ Deployment failed!"
             - kubectl describe deployment example-deployment -n chainsaw-demo
+            - kubectl get pods -n chainsaw-demo -l app=example
+            - kubectl logs -n chainsaw-demo -l app=example --tail=50
 
     # Step 3: Cleanup
     - name: cleanup
