@@ -47,14 +47,21 @@ spec:
           - path: status.conditions[?(@.type=="Available")].status
             op: "=="
             value: "False"
-        # Optional: Event handlers (shell scripts)
+        # Optional: Event handlers (Chainsaw operations)
         handlers:
           onProgress:
-            - echo "Watching deployment - Available: $(echo '$resource' | jq -r '.status.availableReplicas // 0')"
+            - script:
+                content: |
+                  echo "Watching deployment - Available: $(echo '$resource' | jq -r '.status.availableReplicas // 0')"
           onSuccess:
-            - echo "✅ Deployment ready!"
+            - script:
+                content: echo "✅ Deployment ready!"
           onFailure:
-            - kubectl describe deployment example-deployment -n chainsaw-demo
+            - describe:
+                apiVersion: apps/v1
+                kind: Deployment
+                namespace: chainsaw-demo
+                name: example-deployment
 
     # Step 3: Cleanup
     - name: cleanup

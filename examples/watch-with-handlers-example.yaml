@@ -50,27 +50,52 @@ spec:
             op: "=="
             value: "False"
 
-        # Event handlers with examples
+        # Event handlers using Chainsaw operations
         handlers:
-          # Called on every watch event (useful for debugging)
+          # Called on every watch event
           onProgress:
-            - echo "Watch event received - Type: $eventType"
-            - echo "Resource: $resourceName in $resourceNamespace"
-            - echo "Available replicas: $(echo '$resource' | jq -r '.status.availableReplicas // 0')"
+            - script:
+                content: |
+                  echo "Watch event received - Type: $eventType"
+                  echo "Resource: $resourceName in $resourceNamespace"
+                  echo "Available replicas: $(echo '$resource' | jq -r '.status.availableReplicas // 0')"
 
           # Called when all success conditions are met
           onSuccess:
-            - echo "✅ Deployment is ready!"
-            - echo "Final state:"
-            - echo "$resourceYAML"
-            - kubectl get deployment example-deployment -n chainsaw-demo -o wide
+            - script:
+                content: |
+                  echo "✅ Deployment is ready!"
+                  echo "Final state:"
+                  echo "$resourceYAML"
+            - command:
+                entrypoint: kubectl
+                args:
+                  - get
+                  - deployment
+                  - example-deployment
+                  - -n
+                  - chainsaw-demo
+                  - -o
+                  - wide
 
           # Called when any failure condition is met
           onFailure:
-            - echo "❌ Deployment failed!"
-            - kubectl describe deployment example-deployment -n chainsaw-demo
-            - kubectl get pods -n chainsaw-demo -l app=example
-            - kubectl logs -n chainsaw-demo -l app=example --tail=50
+            - script:
+                content: echo "❌ Deployment failed!"
+            - describe:
+                apiVersion: apps/v1
+                kind: Deployment
+                namespace: chainsaw-demo
+                name: example-deployment
+            - get:
+                apiVersion: v1
+                kind: Pod
+                namespace: chainsaw-demo
+                selector: app=example
+            - podLogs:
+                namespace: chainsaw-demo
+                selector: app=example
+                tail: 50
 
     # Step 3: Cleanup
     - name: cleanup

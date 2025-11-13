@@ -443,13 +443,13 @@ type WatchCondition struct {
 type WatchHandlers struct {
 	// OnProgress defines handlers called on each watch event.
 	// +optional
-	OnProgress []Expression `json:"onProgress,omitempty"`
+	OnProgress []CatchFinally `json:"onProgress,omitempty"`
 
 	// OnSuccess defines handlers called when success conditions are met.
 	// +optional
-	OnSuccess []Expression `json:"onSuccess,omitempty"`
+	OnSuccess []CatchFinally `json:"onSuccess,omitempty"`
 
 	// OnFailure defines handlers called when failure conditions are met.
 	// +optional
-	OnFailure []Expression `json:"onFailure,omitempty"`
+	OnFailure []CatchFinally `json:"onFailure,omitempty"`
 }

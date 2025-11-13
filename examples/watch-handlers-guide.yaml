@@ -1,7 +1,16 @@
-# Guide to Watch Handlers in Chainsaw
+# Comprehensive Guide to Watch Handlers in Chainsaw
 #
-# Handlers are shell scripts that execute at different points during the watch operation.
-# They have access to special environment variables containing information about the watched resource.
+# Handlers are Chainsaw operations that execute at different points during the watch operation.
+# They can be any operation supported in catch/finally blocks:
+# - script: Run shell scripts
+# - command: Execute commands
+# - describe: Describe Kubernetes resources
+# - get: Get Kubernetes resources
+# - events: Get Kubernetes events
+# - podLogs: Get pod logs
+# - wait: Wait for resources
+# - sleep: Sleep for a duration
+# - delete: Delete resources
 #
 # Available environment variables in handlers:
 # - $eventType: The type of Kubernetes watch event (ADDED, MODIFIED, DELETED)
@@ -14,18 +23,19 @@
 # - $NAMESPACE: The test namespace (from chainsaw)
 #
 # Handler Types:
-# 1. onProgress: Executes on EVERY watch event (useful for logging/debugging)
+# 1. onProgress: Executes on EVERY watch event
 # 2. onSuccess: Executes when ALL success conditions are met
 # 3. onFailure: Executes when ANY failure condition is met
 
 apiVersion: chainsaw.kyverno.io/v1alpha2
 kind: Test
 metadata:
-  name: watch-handlers-guide
+  name: watch-handlers-comprehensive-guide
 spec:
   namespace: chainsaw-demo
   steps:
-    - name: create-configmap
+    # Example 1: Using script handlers
+    - name: create-config map
       apply:
         resource:
           apiVersion: v1
@@ -34,9 +44,9 @@ spec:
             name: example-config
             namespace: chainsaw-demo
           data:
-            status: "initializing"
+            status: "pending"
 
-    - name: watch-with-simple-handlers
+    - name: watch-with-script-handlers
       watch:
         resource:
           apiVersion: v1
@@ -44,142 +54,22 @@ spec:
           namespace: chainsaw-demo
           name: example-config
         timeout: 30s
-
         successConditions:
           - path: data.status
             op: "=="
             value: "ready"
-
         handlers:
-          # Simple logging handler
           onProgress:
-            - echo "Watching ConfigMap: status=$(echo '$resource' | jq -r '.data.status')"
-
-          # Success handler with detailed output
+            - script:
+                content: |
+                  echo "Current status: $(echo '$resource' | jq -r '.data.status')"
           onSuccess:
-            - |
-              echo "ConfigMap is ready!"
-              echo "Name: $resourceName"
-              echo "Namespace: $resourceNamespace"
-              echo "Event type: $eventType"
+            - script:
+                content: |
+                  echo "✅ ConfigMap is ready!"
+                  echo "$resourceYAML"
 
-          # Failure handler with diagnostics
-          onFailure:
-            - |
-              echo "ConfigMap did not reach ready state"
-              echo "Current resource state:"
-              echo "$resourceYAML"
-
-    - name: watch-with-kubectl-handlers
-      watch:
-        resource:
-          apiVersion: v1
-          kind: ConfigMap
-          namespace: chainsaw-demo
-          name: example-config
-        timeout: 30s
-
-        successConditions:
-          - path: data.status
-            op: "=="
-            value: "complete"
-
-        handlers:
-          # Using kubectl in handlers
-          onProgress:
-            - kubectl get configmap example-config -n chainsaw-demo -o jsonpath='{.data.status}'
-
-          onSuccess:
-            - kubectl get configmap example-config -n chainsaw-demo -o yaml
-
-          onFailure:
-            - kubectl describe configmap example-config -n chainsaw-demo
-
-    - name: watch-with-conditional-handlers
-      watch:
-        resource:
-          apiVersion: v1
-          kind: ConfigMap
-          namespace: chainsaw-demo
-          name: example-config
-        timeout: 30s
-
-        successConditions:
-          - path: data.status
-            op: "=="
-            value: "finished"
-
-        handlers:
-          # Handlers can include conditional logic
-          onProgress:
-            - |
-              STATUS=$(echo '$resource' | jq -r '.data.status')
-              echo "Current status: $STATUS"
-
-              case $STATUS in
-                initializing)
-                  echo "⏳ Initialization in progress..."
-                  ;;
-                ready)
-                  echo "✅ Ready - waiting for completion..."
-                  ;;
-                complete)
-                  echo "🎉 Complete - finalizing..."
-                  ;;
-                finished)
-                  echo "🏁 Finished!"
-                  ;;
-                *)
-                  echo "⚠️  Unknown status: $STATUS"
-                  ;;
-              esac
-
-          # Handler can save data to files
-          onSuccess:
-            - |
-              echo "Saving final state to /tmp/final-state.yaml"
-              echo "$resourceYAML" > /tmp/final-state.yaml
-              echo "Saved successfully"
-
-    - name: watch-with-jq-handlers
-      watch:
-        resource:
-          apiVersion: v1
-          kind: ConfigMap
-          namespace: chainsaw-demo
-          name: example-config
-        timeout: 30s
-
-        handlers:
-          # Advanced jq usage in handlers
-          onProgress:
-            - |
-              echo "All ConfigMap data:"
-              echo '$resource' | jq '.data'
-
-              echo "Specific field:"
-              echo '$resource' | jq -r '.data.status // "not set"'
-
-              echo "Resource metadata:"
-              echo '$resource' | jq '{name: .metadata.name, namespace: .metadata.namespace, labels: .metadata.labels}'
-
-    - name: cleanup
-      delete:
-        ref:
-          apiVersion: v1
-          kind: ConfigMap
-          name: example-config
-
-
----
-# Example: Watching a Deployment with comprehensive handlers
-apiVersion: chainsaw.kyverno.io/v1alpha2
-kind: Test
-metadata:
-  name: deployment-watch-with-diagnostics
-spec:
-  namespace: chainsaw-demo
-  steps:
+    # Example 2: Using describe and get handlers
     - name: create-deployment
       apply:
         resource:
@@ -189,7 +79,7 @@ spec:
             name: nginx-deployment
             namespace: chainsaw-demo
           spec:
-            replicas: 3
+            replicas: 1
             selector:
               matchLabels:
                 app: nginx
@@ -201,78 +91,340 @@ spec:
                 containers:
                   - name: nginx
                     image: nginx:1.21
-                    ports:
-                      - containerPort: 80
 
-    - name: watch-deployment-rollout
+    - name: watch-with-describe-handlers
       watch:
         resource:
           apiVersion: apps/v1
           kind: Deployment
           namespace: chainsaw-demo
           name: nginx-deployment
-        timeout: 180s
+        timeout: 120s
+        successConditions:
+          - path: status.availableReplicas
+            op: ">="
+            value: 1
+        handlers:
+          onSuccess:
+            - describe:
+                apiVersion: apps/v1
+                kind: Deployment
+                namespace: chainsaw-demo
+                name: nginx-deployment
+            - get:
+                apiVersion: v1
+                kind: Pod
+                namespace: chainsaw-demo
+                selector: app=nginx
+                format: wide
 
+    # Example 3: Using events and podLogs handlers
+    - name: watch-with-diagnostic-handlers
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: nginx-deployment
+        timeout: 120s
+        successConditions:
+          - path: status.readyReplicas
+            op: ">="
+            value: 1
+        handlers:
+          onFailure:
+            - script:
+                content: echo "Deployment failed - collecting diagnostics"
+            - describe:
+                apiVersion: apps/v1
+                kind: Deployment
+                namespace: chainsaw-demo
+                name: nginx-deployment
+            - events:
+                namespace: chainsaw-demo
+            - podLogs:
+                namespace: chainsaw-demo
+                selector: app=nginx
+                tail: 100
+
+    # Example 4: Using command handlers
+    - name: watch-with-command-handlers
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: nginx-deployment
+        timeout: 120s
+        successConditions:
+          - path: status.availableReplicas
+            op: ">="
+            value: 1
+        handlers:
+          onProgress:
+            - command:
+                entrypoint: kubectl
+                args:
+                  - get
+                  - pods
+                  - -n
+                  - chainsaw-demo
+                  - -l
+                  - app=nginx
+          onSuccess:
+            - command:
+                entrypoint: kubectl
+                args:
+                  - rollout
+                  - status
+                  - deployment/nginx-deployment
+                  - -n
+                  - chainsaw-demo
+
+    # Example 5: Multiple handlers of different types
+    - name: watch-with-multiple-handlers
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: nginx-deployment
+        timeout: 120s
+        successConditions:
+          - path: status.availableReplicas
+            op: ">="
+            value: 1
+        handlers:
+          onProgress:
+            # Multiple handlers execute in order
+            - script:
+                content: echo "Event type: $eventType"
+            - script:
+                content: |
+                  AVAILABLE=$(echo '$resource' | jq -r '.status.availableReplicas // 0')
+                  echo "Available replicas: $AVAILABLE"
+          onSuccess:
+            # Can mix different operation types
+            - script:
+                content: echo "✅ Success!"
+            - describe:
+                apiVersion: apps/v1
+                kind: Deployment
+                namespace: chainsaw-demo
+                name: nginx-deployment
+            - get:
+                apiVersion: v1
+                kind: Pod
+                namespace: chainsaw-demo
+                selector: app=nginx
+          onFailure:
+            # Comprehensive diagnostics on failure
+            - script:
+                content: echo "❌ Deployment failed"
+            - describe:
+                apiVersion: apps/v1
+                kind: Deployment
+                namespace: chainsaw-demo
+                name: nginx-deployment
+            - events:
+                namespace: chainsaw-demo
+            - podLogs:
+                namespace: chainsaw-demo
+                selector: app=nginx
+                tail: 100
+            - script:
+                content: |
+                  echo "Saving failure state..."
+                  echo "$resourceYAML" > /tmp/failed-deployment.yaml
+
+    # Example 6: Using wait handler (wait for another resource)
+    - name: watch-with-wait-handler
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: nginx-deployment
+        timeout: 120s
+        successConditions:
+          - path: status.availableReplicas
+            op: ">="
+            value: 1
+        handlers:
+          onSuccess:
+            - script:
+                content: echo "Deployment ready, waiting for service..."
+            - wait:
+                apiVersion: v1
+                kind: Service
+                namespace: chainsaw-demo
+                name: nginx-service
+                for:
+                  condition:
+                    name: Ready
+
+    # Example 7: Using delete handler (cleanup on failure)
+    - name: watch-with-cleanup-on-failure
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: nginx-deployment
+        timeout: 120s
+        successConditions:
+          - path: status.availableReplicas
+            op: ">="
+            value: 1
+        handlers:
+          onFailure:
+            - script:
+                content: echo "Deployment failed, cleaning up..."
+            - delete:
+                ref:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  namespace: chainsaw-demo
+                  name: nginx-deployment
+
+    # Example 8: Conditional logic in script handlers
+    - name: watch-with-conditional-handlers
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: nginx-deployment
+        timeout: 120s
+        handlers:
+          onProgress:
+            - script:
+                content: |
+                  AVAILABLE=$(echo '$resource' | jq -r '.status.availableReplicas // 0')
+                  READY=$(echo '$resource' | jq -r '.status.readyReplicas // 0')
+
+                  echo "Deployment progress: $AVAILABLE available, $READY ready"
+
+                  if [ "$AVAILABLE" -eq 0 ]; then
+                    echo "⏳ Waiting for pods to start..."
+                  elif [ "$READY" -lt "$AVAILABLE" ]; then
+                    echo "🔄 Pods starting, waiting for ready state..."
+                  else
+                    echo "✅ All replicas are ready!"
+                  fi
+
+    # Cleanup
+    - name: cleanup
+      delete:
+        ref:
+          apiVersion: v1
+          kind: ConfigMap
+          name: example-config
+    - name: cleanup-deployment
+      delete:
+        ref:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: nginx-deployment
+
+---
+# Example: Advanced handler usage with bindings
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Test
+metadata:
+  name: watch-handlers-with-bindings
+spec:
+  namespace: chainsaw-demo
+  steps:
+    - name: create-deployment
+      apply:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: my-app
+            namespace: chainsaw-demo
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: my-app
+            template:
+              metadata:
+                labels:
+                  app: my-app
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginx:latest
+
+    - name: watch-with-bindings
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: my-app
+        timeout: 180s
         successConditions:
           - path: status.availableReplicas
             op: ">="
             value: 3
-          - path: status.readyReplicas
-            op: ">="
-            value: 3
-
-        failureConditions:
-          - path: status.conditions[?(@.type=="Progressing")].status
-            op: "=="
-            value: "False"
-          - path: status.conditions[?(@.type=="Available")].status
-            op: "=="
-            value: "False"
-
         handlers:
           onProgress:
-            - |
-              AVAILABLE=$(echo '$resource' | jq -r '.status.availableReplicas // 0')
-              READY=$(echo '$resource' | jq -r '.status.readyReplicas // 0')
-              REPLICAS=$(echo '$resource' | jq -r '.spec.replicas')
-
-              echo "Deployment progress: $AVAILABLE/$REPLICAS available, $READY/$REPLICAS ready"
-
-              # Show pod status
-              echo "Pod status:"
-              kubectl get pods -n $resourceNamespace -l app=nginx -o wide
-
+            # Handlers can access all test bindings plus watch-specific ones
+            - script:
+                content: |
+                  echo "=== Deployment Status ==="
+                  echo "Name: $resourceName"
+                  echo "Namespace: $resourceNamespace"
+                  echo "Event: $eventType"
+                  echo ""
+                  echo "Resource state:"
+                  echo '$resource' | jq '{
+                    replicas: .spec.replicas,
+                    available: .status.availableReplicas,
+                    ready: .status.readyReplicas,
+                    updated: .status.updatedReplicas,
+                    conditions: [.status.conditions[] | {type: .type, status: .status}]
+                  }'
           onSuccess:
-            - |
-              echo "✅ Deployment rollout successful!"
-              echo ""
-              echo "Deployment details:"
-              kubectl get deployment nginx-deployment -n chainsaw-demo
-              echo ""
-              echo "Pod details:"
-              kubectl get pods -n chainsaw-demo -l app=nginx -o wide
-              echo ""
-              echo "Resource version: $(echo '$resource' | jq -r '.metadata.resourceVersion')"
-
+            - script:
+                content: |
+                  echo "🎉 Deployment rollout completed successfully!"
+                  echo "Final resource version: $(echo '$resource' | jq -r '.metadata.resourceVersion')"
+            - get:
+                apiVersion: v1
+                kind: Pod
+                namespace: chainsaw-demo
+                selector: app=my-app
+                format: wide
           onFailure:
-            - |
-              echo "❌ Deployment rollout failed!"
-              echo ""
-              echo "Deployment status:"
-              kubectl describe deployment nginx-deployment -n chainsaw-demo
-              echo ""
-              echo "Pod status:"
-              kubectl get pods -n chainsaw-demo -l app=nginx
-              echo ""
-              echo "Recent events:"
-              kubectl get events -n chainsaw-demo --sort-by='.lastTimestamp' | grep nginx-deployment | tail -20
-              echo ""
-              echo "Pod logs (if any pods exist):"
-              kubectl logs -n chainsaw-demo -l app=nginx --tail=50 --all-containers=true || echo "No pods found"
+            - script:
+                content: |
+                  echo "❌ Deployment rollout failed"
+                  echo "Last known state:"
+                  echo "$resourceYAML"
+            - describe:
+                apiVersion: apps/v1
+                kind: Deployment
+                namespace: chainsaw-demo
+                name: my-app
+            - get:
+                apiVersion: v1
+                kind: Pod
+                namespace: chainsaw-demo
+                selector: app=my-app
+            - podLogs:
+                namespace: chainsaw-demo
+                selector: app=my-app
+                tail: 50
+            - events:
+                namespace: chainsaw-demo
 
     - name: cleanup
       delete:
         ref:
           apiVersion: apps/v1
           kind: Deployment
-          name: nginx-deployment
+          name: my-app
