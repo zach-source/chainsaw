@@ -67,6 +67,8 @@ func TryOperation(
 		return model.OperationTypeUpdate, loaded, err
 	} else if handler.Wait != nil {
 		return model.OperationTypeCommand, []Operation{waitOperation(*handler.Wait)}, nil
+	} else if handler.Watch != nil {
+		return model.OperationTypeWatch, []Operation{watchOperation(*handler.Watch)}, nil
 	} else {
 		return "", nil, errors.New("no operation found")
 	}
@@ -112,6 +114,8 @@ func CatchOperation(
 		ops = append(ops, sleepOperation(*handler.Sleep))
 	} else if handler.Wait != nil {
 		ops = append(ops, waitOperation(*handler.Wait))
+	} else if handler.Watch != nil {
+		ops = append(ops, watchOperation(*handler.Watch))
 	} else {
 		return nil, errors.New("no operation found")
 	}

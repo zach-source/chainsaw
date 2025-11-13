@@ -398,3 +398,58 @@ type WaitForJsonPath struct {
 	// +optional
 	Value *Expression `json:"value,omitempty"`
 }
+
+// Watch specifies how to perform watch operations on resources.
+type Watch struct {
+	ActionClusters `json:",inline"`
+	ActionTimeout  `json:",inline"`
+
+	// Resource specifies the resource to watch.
+	Resource WatchResource `json:"resource"`
+
+	// SuccessConditions defines conditions that indicate the watch succeeded.
+	// +optional
+	SuccessConditions []WatchCondition `json:"successConditions,omitempty"`
+
+	// FailureConditions defines conditions that immediately fail the test.
+	// +optional
+	FailureConditions []WatchCondition `json:"failureConditions,omitempty"`
+
+	// Handlers defines event handlers for the watch operation.
+	// +optional
+	Handlers *WatchHandlers `json:"handlers,omitempty"`
+}
+
+// WatchResource represents the resource to watch.
+type WatchResource struct {
+	ObjectType `json:",inline"`
+	ObjectName `json:",inline"`
+}
+
+// WatchCondition represents a condition to check during watch.
+type WatchCondition struct {
+	// Path defines the JSONPath expression to evaluate.
+	Path Expression `json:"path"`
+
+	// Op defines the comparison operator.
+	// +kubebuilder:validation:Enum:="==";!=;>;>=;<;<=
+	Op string `json:"op"`
+
+	// Value defines the value to compare against.
+	Value Projection `json:"value"`
+}
+
+// WatchHandlers defines event handlers for watch operations.
+type WatchHandlers struct {
+	// OnProgress defines handlers called on each watch event.
+	// +optional
+	OnProgress []Expression `json:"onProgress,omitempty"`
+
+	// OnSuccess defines handlers called when success conditions are met.
+	// +optional
+	OnSuccess []Expression `json:"onSuccess,omitempty"`
+
+	// OnFailure defines handlers called when failure conditions are met.
+	// +optional
+	OnFailure []Expression `json:"onFailure,omitempty"`
+}

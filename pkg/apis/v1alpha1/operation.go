@@ -32,6 +32,7 @@ type OperationBase struct {
 // +kubebuilder:oneOf:={required:{sleep}}
 // +kubebuilder:oneOf:={required:{update}}
 // +kubebuilder:oneOf:={required:{wait}}
+// +kubebuilder:oneOf:={required:{watch}}
 type Operation struct {
 	// OperationBase defines common elements to all operations.
 	// +optional
@@ -102,6 +103,10 @@ type Operation struct {
 	// Wait determines the resource wait collector to execute.
 	// +optional
 	Wait *Wait `json:"wait,omitempty"`
+
+	// Watch watches a resource and evaluates conditions.
+	// +optional
+	Watch *Watch `json:"watch,omitempty"`
 }
 
 func (o *Operation) Bindings() []Binding {
@@ -137,6 +142,8 @@ func (o *Operation) Bindings() []Binding {
 	case o.Update != nil:
 		return o.Update.Bindings
 	case o.Wait != nil:
+		return nil
+	case o.Watch != nil:
 		return nil
 	}
 	panic("missing binding operation type handler")
@@ -175,6 +182,8 @@ func (o *Operation) Outputs() []Output {
 	case o.Update != nil:
 		return o.Update.Outputs
 	case o.Wait != nil:
+		return nil
+	case o.Watch != nil:
 		return nil
 	}
 	panic("missing output operation type handler")

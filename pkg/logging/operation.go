@@ -21,4 +21,5 @@ const (
 	Stdout   Operation = "STDOUT"
 	Try      Operation = "TRY"
 	Update   Operation = "UPDATE"
+	Watch    Operation = "WATCH"
 )

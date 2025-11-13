@@ -1,0 +1,57 @@
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Test
+metadata:
+  name: watch-deployment-example
+spec:
+  namespace: chainsaw-demo
+  steps:
+    # Step 1: Create a deployment
+    - name: create-deployment
+      apply:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: example-deployment
+            namespace: chainsaw-demo
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: example
+            template:
+              metadata:
+                labels:
+                  app: example
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginx:latest
+
+    # Step 2: Watch the deployment until it's ready
+    - name: watch-deployment
+      watch:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          namespace: chainsaw-demo
+          name: example-deployment
+        timeout: 120s
+        # Success condition: at least 1 replica is available
+        successConditions:
+          - path: status.availableReplicas
+            op: ">="
+            value: 1
+        # Failure condition: deployment is marked as failed
+        failureConditions:
+          - path: status.conditions[?(@.type=="Available")].status
+            op: "=="
+            value: "False"
+
+    # Step 3: Cleanup
+    - name: cleanup
+      delete:
+        ref:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: example-deployment

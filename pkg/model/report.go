@@ -19,6 +19,7 @@ const (
 	OperationTypeScript  OperationType = "script"
 	OperationTypeSleep   OperationType = "sleep"
 	OperationTypeUpdate  OperationType = "update"
+	OperationTypeWatch   OperationType = "watch"
 )
 
 type Report struct {
