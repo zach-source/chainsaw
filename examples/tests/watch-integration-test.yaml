@@ -1,0 +1,401 @@
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Test
+metadata:
+  name: watch-integration-test
+spec:
+  description: Integration tests for the watch step type
+  namespace: chainsaw-watch-test
+  steps:
+    # Test 1: Basic watch with simple success condition
+    - name: test-basic-watch
+      try:
+        - name: create-configmap
+          apply:
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: test-config
+                namespace: chainsaw-watch-test
+              data:
+                status: "pending"
+
+        - name: update-configmap-to-ready
+          script:
+            content: |
+              sleep 2
+              kubectl patch configmap test-config -n chainsaw-watch-test \
+                --type merge -p '{"data":{"status":"ready"}}'
+
+        - name: watch-configmap-ready
+          watch:
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              namespace: chainsaw-watch-test
+              name: test-config
+            timeout: 30s
+            successConditions:
+              - path: data.status
+                op: "=="
+                value: "ready"
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: ConfigMap
+              name: test-config
+
+    # Test 2: Watch with numeric conditions
+    - name: test-numeric-conditions
+      try:
+        - name: create-deployment
+          apply:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: test-deployment
+                namespace: chainsaw-watch-test
+              spec:
+                replicas: 2
+                selector:
+                  matchLabels:
+                    app: test
+                template:
+                  metadata:
+                    labels:
+                      app: test
+                  spec:
+                    containers:
+                      - name: nginx
+                        image: nginx:1.21
+                        resources:
+                          requests:
+                            memory: "64Mi"
+                            cpu: "50m"
+                          limits:
+                            memory: "128Mi"
+                            cpu: "100m"
+
+        - name: watch-deployment-ready
+          watch:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              namespace: chainsaw-watch-test
+              name: test-deployment
+            timeout: 120s
+            successConditions:
+              - path: status.availableReplicas
+                op: ">="
+                value: 2
+              - path: status.readyReplicas
+                op: ">="
+                value: 2
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: test-deployment
+
+    # Test 3: Watch with onProgress handlers
+    - name: test-progress-handlers
+      try:
+        - name: create-pod
+          apply:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: test-pod
+                namespace: chainsaw-watch-test
+              spec:
+                containers:
+                  - name: busybox
+                    image: busybox:latest
+                    command: ["sleep", "30"]
+
+        - name: watch-pod-with-progress
+          watch:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              namespace: chainsaw-watch-test
+              name: test-pod
+            timeout: 60s
+            successConditions:
+              - path: status.phase
+                op: "=="
+                value: "Running"
+            handlers:
+              onProgress:
+                - script:
+                    content: |
+                      echo "Pod status: $(echo '$resource' | jq -r '.status.phase // "Unknown"')"
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              name: test-pod
+
+    # Test 4: Watch with success handlers
+    - name: test-success-handlers
+      try:
+        - name: create-service
+          apply:
+            resource:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: test-service
+                namespace: chainsaw-watch-test
+              spec:
+                selector:
+                  app: test
+                ports:
+                  - port: 80
+                    targetPort: 8080
+
+        - name: watch-service-with-success-handler
+          watch:
+            resource:
+              apiVersion: v1
+              kind: Service
+              namespace: chainsaw-watch-test
+              name: test-service
+            timeout: 30s
+            handlers:
+              onSuccess:
+                - script:
+                    content: echo "✅ Service created successfully!"
+                - get:
+                    apiVersion: v1
+                    kind: Service
+                    namespace: chainsaw-watch-test
+                    name: test-service
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Service
+              name: test-service
+
+    # Test 5: Watch with failure conditions and handlers
+    - name: test-failure-conditions
+      try:
+        - name: create-failing-pod
+          apply:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: failing-pod
+                namespace: chainsaw-watch-test
+              spec:
+                containers:
+                  - name: failing-container
+                    image: nonexistent-image:latest
+                    imagePullPolicy: Always
+
+        - name: watch-pod-failure
+          continueOnError: true
+          watch:
+            resource:
+              apiVersion: v1
+              kind: Pod
+              namespace: chainsaw-watch-test
+              name: failing-pod
+            timeout: 60s
+            successConditions:
+              - path: status.phase
+                op: "=="
+                value: "Running"
+            failureConditions:
+              - path: status.phase
+                op: "=="
+                value: "Failed"
+            handlers:
+              onProgress:
+                - script:
+                    content: |
+                      echo "Pod phase: $(echo '$resource' | jq -r '.status.phase // "Unknown"')"
+              onFailure:
+                - script:
+                    content: echo "❌ Pod failed as expected"
+                - describe:
+                    apiVersion: v1
+                    kind: Pod
+                    namespace: chainsaw-watch-test
+                    name: failing-pod
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: Pod
+              name: failing-pod
+
+    # Test 6: Watch with multiple handlers
+    - name: test-multiple-handlers
+      try:
+        - name: create-deployment-for-handlers
+          apply:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: handler-test-deployment
+                namespace: chainsaw-watch-test
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: handler-test
+                template:
+                  metadata:
+                    labels:
+                      app: handler-test
+                  spec:
+                    containers:
+                      - name: nginx
+                        image: nginx:alpine
+
+        - name: watch-with-multiple-handlers
+          watch:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              namespace: chainsaw-watch-test
+              name: handler-test-deployment
+            timeout: 120s
+            successConditions:
+              - path: status.availableReplicas
+                op: ">="
+                value: 1
+            handlers:
+              onProgress:
+                - script:
+                    content: |
+                      echo "Available: $(echo '$resource' | jq -r '.status.availableReplicas // 0')"
+                - script:
+                    content: |
+                      echo "Ready: $(echo '$resource' | jq -r '.status.readyReplicas // 0')"
+              onSuccess:
+                - script:
+                    content: echo "✅ Deployment successful!"
+                - get:
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    namespace: chainsaw-watch-test
+                    name: handler-test-deployment
+                    format: wide
+                - get:
+                    apiVersion: v1
+                    kind: Pod
+                    namespace: chainsaw-watch-test
+                    selector: app=handler-test
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: handler-test-deployment
+
+    # Test 7: Watch with not-equals operator
+    - name: test-not-equals-operator
+      try:
+        - name: create-configmap-for-not-equals
+          apply:
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: test-not-equals
+                namespace: chainsaw-watch-test
+              data:
+                status: "active"
+
+        - name: watch-not-equals
+          watch:
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              namespace: chainsaw-watch-test
+              name: test-not-equals
+            timeout: 30s
+            successConditions:
+              - path: data.status
+                op: "!="
+                value: "pending"
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: v1
+              kind: ConfigMap
+              name: test-not-equals
+
+    # Test 8: Watch with command handler
+    - name: test-command-handler
+      try:
+        - name: create-deployment-for-command
+          apply:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: command-test
+                namespace: chainsaw-watch-test
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: command-test
+                template:
+                  metadata:
+                    labels:
+                      app: command-test
+                  spec:
+                    containers:
+                      - name: nginx
+                        image: nginx:alpine
+
+        - name: watch-with-command-handler
+          watch:
+            resource:
+              apiVersion: apps/v1
+              kind: Deployment
+              namespace: chainsaw-watch-test
+              name: command-test
+            timeout: 120s
+            successConditions:
+              - path: status.availableReplicas
+                op: ">="
+                value: 1
+            handlers:
+              onSuccess:
+                - command:
+                    entrypoint: kubectl
+                    args:
+                      - get
+                      - deployment
+                      - command-test
+                      - -n
+                      - chainsaw-watch-test
+                      - -o
+                      - jsonpath={.status.conditions[?(@.type=="Available")].status}
+
+      finally:
+        - delete:
+            ref:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: command-test

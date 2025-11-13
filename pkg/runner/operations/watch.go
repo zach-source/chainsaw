@@ -9,7 +9,6 @@ import (
 
 	"github.com/kyverno/chainsaw/pkg/apis/v1alpha1"
 	apibindings "github.com/kyverno/chainsaw/pkg/engine/bindings"
-	"github.com/kyverno/chainsaw/pkg/engine/operations/internal"
 	"github.com/kyverno/chainsaw/pkg/engine/operations/watch"
 	"github.com/kyverno/chainsaw/pkg/engine/outputs"
 	"github.com/kyverno/chainsaw/pkg/logging"
@@ -38,7 +37,7 @@ func (o watchAction) Execute(ctx context.Context, tc enginecontext.TestContext) 
 		return nil, err
 	}
 
-	_, client, err := tc.CurrentClusterClient()
+	config, _, err := tc.CurrentClusterClient()
 	if err != nil {
 		return nil, err
 	}
@@ -52,17 +51,11 @@ func (o watchAction) Execute(ctx context.Context, tc enginecontext.TestContext) 
 
 	// Create watcher
 	obj := unstructured.Unstructured{}
-	defer func() {
-		internal.LogEnd(ctx, logging.Watch, &obj, err)
-	}()
-
-	watcher, resourceInfo, err := watch.CreateWatcher(ctx, tc.Compilers(), client, tc.Namespacer(), tc.Bindings(), &o.op, &obj)
+	watcher, resourceInfo, err := watch.CreateWatcher(ctx, config, tc.Compilers(), tc.Namespacer(), tc.Bindings(), &o.op, &obj)
 	if err != nil {
 		return nil, err
 	}
 	defer watcher.Stop()
-
-	internal.LogStart(ctx, logging.Watch, &obj)
 
 	// Add buffer to the context timeout
 	ctx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)

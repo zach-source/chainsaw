@@ -8,13 +8,15 @@ import (
 
 	"github.com/kyverno/chainsaw/pkg/apis"
 	"github.com/kyverno/chainsaw/pkg/apis/v1alpha1"
-	"github.com/kyverno/chainsaw/pkg/client"
 	"github.com/kyverno/chainsaw/pkg/engine/namespacer"
 	"github.com/kyverno/kyverno-json/pkg/core/compilers"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 )
 
 // ResourceInfo contains information about the watched resource
@@ -28,8 +30,8 @@ type ResourceInfo struct {
 // CreateWatcher creates a Kubernetes watcher for the specified resource
 func CreateWatcher(
 	ctx context.Context,
+	config *rest.Config,
 	compilers compilers.Compilers,
-	client client.Client,
 	namespacer namespacer.Namespacer,
 	bindings apis.Bindings,
 	watchSpec *v1alpha1.Watch,
@@ -76,8 +78,14 @@ func CreateWatcher(
 		return nil, resourceInfo, fmt.Errorf("invalid apiVersion %s: %w", apiVersion, err)
 	}
 
+	// Create discovery client
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return nil, resourceInfo, fmt.Errorf("failed to create discovery client: %w", err)
+	}
+
 	// Get resource mapping
-	resources, err := client.Discovery().ServerResourcesForGroupVersion(apiVersion)
+	resources, err := discoveryClient.ServerResourcesForGroupVersion(apiVersion)
 	if err != nil {
 		return nil, resourceInfo, fmt.Errorf("failed to discover resources for %s: %w", apiVersion, err)
 	}
@@ -100,7 +108,11 @@ func CreateWatcher(
 	}
 
 	// Create dynamic client
-	dynamicClient := client.DynamicClient()
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, resourceInfo, fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
 	var resourceInterface dynamic.ResourceInterface
 	if namespace != "" {
 		resourceInterface = dynamicClient.Resource(gvr).Namespace(namespace)
@@ -109,7 +121,7 @@ func CreateWatcher(
 	}
 
 	// Start watch
-	watcher, err := resourceInterface.Watch(ctx, client.ListOptions{
+	watcher, err := resourceInterface.Watch(ctx, metav1.ListOptions{
 		FieldSelector: "metadata.name=" + name,
 	})
 	if err != nil {
@@ -137,7 +149,7 @@ func EvaluateCondition(ctx context.Context, compilers compilers.Compilers, bindi
 	}
 
 	// Resolve expected value from projection
-	expectedValueRaw := condition.Value.Value
+	expectedValueRaw := condition.Value.Value()
 	if expectedValueRaw == nil {
 		return false, errors.New("condition value is nil")
 	}
